@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/olivia/ezenv/cmd"
+	"github.com/oliviaBahr/ez-env/cmd"
 )
 
 func main() {
@@ -27,7 +27,7 @@ func main() {
 	case "add-file":
 		err = cmd.AddFile(args)
 	case "update-keys":
-		err = cmd.UpdateKeys(args)
+		err = cmd.UpdateKeys()
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		os.Exit(1)

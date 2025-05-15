@@ -1,43 +1,50 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 
-	"github.com/olivia/ezenv/github"
-	"github.com/olivia/ezenv/keyring"
+	"github.com/oliviaBahr/ez-env/crypto"
+	"github.com/oliviaBahr/ez-env/github"
 )
 
 // Init initializes ezenv in the current repository
 func Init(args []string) error {
 	// Check if we're in a git repository
 	if err := checkGitRepo(); err != nil {
-		return err
+		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	// Get GitHub token from environment or gh auth
-	token, err := getGitHubToken()
-	if err != nil {
-		return fmt.Errorf("failed to get GitHub token: %w", err)
+	// Create a new keyring
+	keyring := crypto.NewKeyring()
+
+	// Generate a new DEK
+	if err := keyring.DEK.GenerateRawKey(); err != nil {
+		return fmt.Errorf("failed to generate DEK: %w", err)
 	}
 
-	// Get repository info
-	repo, err := getRepoInfo()
-	if err != nil {
-		return fmt.Errorf("failed to get repository info: %w", err)
-	}
-
-	// Fetch collaborators and their SSH keys
-	collaborators, err := github.GetCollaborators(repo.owner, repo.name, token)
+	// Get collaborators and their SSH keys
+	collaborators, err := github.GetRepositoryCollaborators(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get collaborators: %w", err)
 	}
 
-	// Create keyring
-	if err := keyring.Create(collaborators); err != nil {
-		return fmt.Errorf("failed to create keyring: %w", err)
+	// Update keyring with collaborators
+	if err := keyring.UpdateCollaborators(collaborators); err != nil {
+		return fmt.Errorf("failed to update keyring with collaborators: %w", err)
+	}
+
+	// Generate encrypted DEKs for each collaborator
+	if err := keyring.GenerateEncryptedDEKs(); err != nil {
+		return fmt.Errorf("failed to generate encrypted DEKs: %w", err)
+	}
+
+	// Save the keyring
+	if err := keyring.Save(); err != nil {
+		return fmt.Errorf("failed to save keyring: %w", err)
 	}
 
 	// Set up git attributes
@@ -50,13 +57,13 @@ func Init(args []string) error {
 		return fmt.Errorf("failed to configure git filters: %w", err)
 	}
 
+	// Add .gitenv_keyring and .gitattributes to git
+	if err := addFilesToGit(); err != nil {
+		return fmt.Errorf("failed to add files to git: %w", err)
+	}
+
 	fmt.Println("ezenv initialized successfully!")
 	return nil
-}
-
-type repoInfo struct {
-	owner string
-	name  string
 }
 
 func checkGitRepo() error {
@@ -65,39 +72,6 @@ func checkGitRepo() error {
 		return fmt.Errorf("not a git repository")
 	}
 	return nil
-}
-
-func getGitHubToken() (string, error) {
-	// First try environment variable
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		return token, nil
-	}
-
-	// Then try gh auth
-	cmd := exec.Command("gh", "auth", "token")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("no GitHub token found in environment or gh auth")
-	}
-
-	return string(output), nil
-}
-
-func getRepoInfo() (repoInfo, error) {
-	cmd := exec.Command("git", "remote", "get-url", "origin")
-	output, err := cmd.Output()
-	if err != nil {
-		return repoInfo{}, fmt.Errorf("failed to get remote URL")
-	}
-
-	// Parse the remote URL to get owner and repo name
-	// This is a simplified version - you might want to handle more URL formats
-	url := string(output)
-	// TODO: Implement proper URL parsing
-	return repoInfo{
-		owner: "owner", // Placeholder
-		name:  "repo",  // Placeholder
-	}, nil
 }
 
 func setupGitAttributes() error {
@@ -128,6 +102,22 @@ func configureGitFilters() error {
 	smudgeCmd := exec.Command("git", "config", "filter.ezenv.smudge", exe+" smudge")
 	if err := smudgeCmd.Run(); err != nil {
 		return fmt.Errorf("failed to configure smudge filter: %w", err)
+	}
+
+	return nil
+}
+
+func addFilesToGit() error {
+	// Add .gitenv_keyring
+	addKeyringCmd := exec.Command("git", "add", ".gitenv_keyring")
+	if err := addKeyringCmd.Run(); err != nil {
+		return fmt.Errorf("failed to add .gitenv_keyring to git: %w", err)
+	}
+
+	// Add .gitattributes
+	addAttrsCmd := exec.Command("git", "add", ".gitattributes")
+	if err := addAttrsCmd.Run(); err != nil {
+		return fmt.Errorf("failed to add .gitattributes to git: %w", err)
 	}
 
 	return nil

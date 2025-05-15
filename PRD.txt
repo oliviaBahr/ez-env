@@ -70,21 +70,7 @@
 ## Directory Structure of ezenv (project source)
 
 ```
-ezenv/
-├── main.go                 # Entry point for the CLI
-├── cmd/
-│   ├── init.go             # Implements `git env init`
-│   ├── add_file.go         # Implements `git env add-file`
-│   ├── update_keys.go      # Implements `git env update-keys`
-├── gitfilter/
-│   ├── clean.go            # Encrypts file contents
-│   ├── smudge.go           # Decrypts file contents
-├── github/
-│   └── api.go              # Calls GitHub API to get collaborators and SSH keys
-├── crypto/
-│   ├── encrypt.go          # Symmetric encryption and wrapping of shared DEK
-│   ├── decrypt.go          # Decryption logic
-│   └── keyring.go          # Loads and updates `.gitenv_keyring`
+
 ```
 
 ## Notes
@@ -97,4 +83,4 @@ ezenv/
 
 ---
 
-Let me know when you’re ready to start implementing or need scaffolding for any part.
+Let me know when you're ready to start implementing or need scaffolding for any part.
