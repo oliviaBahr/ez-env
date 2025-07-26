@@ -1,0 +1,106 @@
+name: ez-env Key Management
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'get-key'
+        type: choice
+        options:
+        - get-key
+        - create-key
+        - rotate-key
+      user:
+        description: 'GitHub username requesting key'
+        required: true
+        type: string
+
+jobs:
+  key-management:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Get or Create Key
+      id: key-action
+      run: |
+        echo "Input action: ${{ github.event.inputs.action }}"
+        case "${{ github.event.inputs.action }}" in
+          "get-key")
+            echo "action=get-key" >> $GITHUB_OUTPUT
+            echo "Set action=get-key"
+            ;;
+          "create-key")
+            echo "action=create" >> $GITHUB_OUTPUT
+            echo "Set action=create"
+            ;;
+          "rotate-key")
+            echo "action=rotate" >> $GITHUB_OUTPUT
+            echo "Set action=rotate"
+            ;;
+        esac
+        echo "Final action output: ${{ steps.key-action.outputs.action }}"
+
+    - name: Create New Key
+      id: create-key
+      if: steps.key-action.outputs.action == 'create' || steps.key-action.outputs.action == 'rotate'
+      run: |
+        # Generate a new 32-byte encryption key
+        NEW_KEY=$(openssl rand -base64 32)
+        echo "key=$NEW_KEY" >> $GITHUB_OUTPUT
+        
+        # Store the key in repository secrets
+        echo "$NEW_KEY" | gh secret set EZENV_ENCRYPTION_KEY
+        
+        echo "✓ New encryption key created and stored"
+
+    - name: Get Existing Key
+      id: get-key
+      if: steps.key-action.outputs.action == 'get-key'
+      env:
+        EXISTING_KEY: ${{ secrets.EZENV_ENCRYPTION_KEY }}
+      run: |
+        if [ -n "$EXISTING_KEY" ]; then
+          # Secret exists and is accessible
+          echo "key=$EXISTING_KEY" >> $GITHUB_OUTPUT
+          echo "✓ Existing encryption key retrieved"
+        else
+          # Secret doesn't exist, create a new one
+          echo "No existing key found. Creating new key..."
+          NEW_KEY=$(openssl rand -base64 32)
+          echo "$NEW_KEY" | gh secret set EZENV_ENCRYPTION_KEY
+          echo "key=$NEW_KEY" >> $GITHUB_OUTPUT
+          echo "✓ New encryption key created and stored"
+        fi
+
+    - name: Create Key Artifact
+      run: |
+        # Create a temporary file with the key
+        if [ -n "${{ steps.create-key.outputs.key }}" ]; then
+          KEY_VALUE="${{ steps.create-key.outputs.key }}"
+        elif [ -n "${{ steps.get-key.outputs.key }}" ]; then
+          KEY_VALUE="${{ steps.get-key.outputs.key }}"
+        else
+          echo "ERROR: No key value found from previous steps"
+          exit 1
+        fi
+        
+        echo "$KEY_VALUE" > encryption-key.txt
+        echo "✓ Key written to file"
+
+    - name: Upload Key Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: encryption-key-${{ github.event.inputs.user }}
+        path: encryption-key.txt
+        retention-days: 1
+
+    - name: Log Access
+      run: |
+        echo "Key access logged for user: ${{ github.event.inputs.user }}"
+        echo "Action: ${{ github.event.inputs.action }}"
+        echo "Run ID: ${{ github.run_id }}"
+        echo "Timestamp: $(date -u)" 

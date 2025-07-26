@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/oliviaBahr/ez-env/crypto"
-	"github.com/oliviaBahr/ez-env/github"
+	"github.com/oliviaBahr/ez-env/workflows"
 )
 
 // Init initializes ezenv in the current repository
@@ -18,36 +18,22 @@ func Init(args []string) error {
 		return fmt.Errorf("not a git repository: %w", err)
 	}
 
-	// Create a new keyring
-	keyring := crypto.NewKeyring()
+	ctx := context.Background()
 
-	// Generate a new DEK
-	if err := keyring.DEK.GenerateRawKey(); err != nil {
-		return fmt.Errorf("failed to generate DEK: %w", err)
-	}
-
-	// Get collaborators and their SSH keys
-	collaborators, err := github.GetRepositoryCollaborators(context.Background())
+	// Create key manager and get/create encryption key
+	fmt.Println("Setting up ez-env with GitHub Actions workflow-based key management...")
+	keyManager := crypto.NewKeyManager()
+	key, err := keyManager.GetOrCreateEncryptionKey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get collaborators: %w", err)
+		return fmt.Errorf("failed to get or create encryption key: %w", err)
 	}
 
-	// Update keyring with collaborators
-	if err := keyring.UpdateCollaborators(collaborators); err != nil {
-		return fmt.Errorf("failed to update keyring with collaborators: %w", err)
+	// Write the workflow file to the repository
+	if err := writeWorkflowFile(); err != nil {
+		return fmt.Errorf("failed to write workflow file: %w", err)
 	}
 
-	// Generate encrypted DEKs for each collaborator
-	if err := keyring.GenerateEncryptedDEKs(); err != nil {
-		return fmt.Errorf("failed to generate encrypted DEKs: %w", err)
-	}
-
-	// Save the keyring
-	if err := keyring.Save(); err != nil {
-		return fmt.Errorf("failed to save keyring: %w", err)
-	}
-
-	// Set up git attributes
+	// Set up git attributes (will be populated as files are added)
 	if err := setupGitAttributes(); err != nil {
 		return fmt.Errorf("failed to set up git attributes: %w", err)
 	}
@@ -57,12 +43,30 @@ func Init(args []string) error {
 		return fmt.Errorf("failed to configure git filters: %w", err)
 	}
 
-	// Add .gitenv_keyring and .gitattributes to git
-	if err := addFilesToGit(); err != nil {
-		return fmt.Errorf("failed to add files to git: %w", err)
+	// Add .gitattributes to git
+	if err := addGitAttributesToGit(); err != nil {
+		return fmt.Errorf("failed to add .gitattributes to git: %w", err)
 	}
 
-	fmt.Println("ezenv initialized successfully!")
+	// Add workflow file to git
+	if err := addWorkflowToGit(); err != nil {
+		return fmt.Errorf("failed to add workflow to git: %w", err)
+	}
+
+	fmt.Println("✓ ezenv initialized successfully!")
+	fmt.Printf("✓ Encryption key: %d bytes\n", len(key))
+	fmt.Println("✓ Git filters configured")
+	fmt.Println("✓ .gitattributes created")
+	fmt.Println("✓ GitHub workflow created")
+	fmt.Println("\nKey Management:")
+	fmt.Println("  - Encryption key stored in GitHub repository secrets")
+	fmt.Println("  - Key distribution via GitHub Actions workflow")
+	fmt.Println("  - Access controlled by repository permissions")
+	fmt.Println("\nNext steps:")
+	fmt.Println("  - Use 'git ez-env add <file>' to specify files for encryption")
+	fmt.Println("  - Use 'git add <file>' to stage files (they'll be encrypted automatically)")
+	fmt.Println("  - Push changes to enable workflow-based key management for collaborators")
+
 	return nil
 }
 
@@ -74,9 +78,27 @@ func checkGitRepo() error {
 	return nil
 }
 
+func writeWorkflowFile() error {
+	fmt.Println("Setting up GitHub workflow...")
+
+	// Get the current working directory (repository root)
+	repoPath, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Write the workflow file
+	if err := workflows.WriteWorkflowFile(repoPath); err != nil {
+		return fmt.Errorf("failed to write workflow file: %w", err)
+	}
+
+	fmt.Println("✓ GitHub workflow created")
+	return nil
+}
+
 func setupGitAttributes() error {
 	content := `# ezenv encrypted files
-*.env filter=ezenv
+# Files will be added here when you run 'git ez-env add <file>'
 `
 	return os.WriteFile(".gitattributes", []byte(content), 0644)
 }
@@ -92,32 +114,42 @@ func configureGitFilters() error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Configure clean filter
+	// Configure clean filter to run on add/commit
 	cleanCmd := exec.Command("git", "config", "filter.ezenv.clean", exe+" clean")
 	if err := cleanCmd.Run(); err != nil {
 		return fmt.Errorf("failed to configure clean filter: %w", err)
 	}
 
-	// Configure smudge filter
+	// Configure smudge filter to run on checkout
 	smudgeCmd := exec.Command("git", "config", "filter.ezenv.smudge", exe+" smudge")
 	if err := smudgeCmd.Run(); err != nil {
 		return fmt.Errorf("failed to configure smudge filter: %w", err)
 	}
 
+	// Enable the filter to run automatically
+	requiredCmd := exec.Command("git", "config", "filter.ezenv.required", "true")
+	if err := requiredCmd.Run(); err != nil {
+		return fmt.Errorf("failed to configure filter as required: %w", err)
+	}
+
 	return nil
 }
 
-func addFilesToGit() error {
-	// Add .gitenv_keyring
-	addKeyringCmd := exec.Command("git", "add", ".gitenv_keyring")
-	if err := addKeyringCmd.Run(); err != nil {
-		return fmt.Errorf("failed to add .gitenv_keyring to git: %w", err)
-	}
-
+func addGitAttributesToGit() error {
 	// Add .gitattributes
 	addAttrsCmd := exec.Command("git", "add", ".gitattributes")
 	if err := addAttrsCmd.Run(); err != nil {
 		return fmt.Errorf("failed to add .gitattributes to git: %w", err)
+	}
+
+	return nil
+}
+
+func addWorkflowToGit() error {
+	// Add the workflow file
+	addWorkflowCmd := exec.Command("git", "add", ".github/workflows/ez-env-key-management.yml")
+	if err := addWorkflowCmd.Run(); err != nil {
+		return fmt.Errorf("failed to add workflow to git: %w", err)
 	}
 
 	return nil
